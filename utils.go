@@ -1,11 +1,14 @@
-package lb
+package main
 
 import (
 	"fmt"
+	"math/rand"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -74,4 +77,42 @@ func (lb *LoadBalancer) GetNextServer(servers []*Server) *Server {
 	}
 
 	return nil
+}
+
+func PrepServer(server *Server) (*http.Server, string) {
+	port := server.URL.Port()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		conns := atomic.LoadInt32(&server.Connections)
+		fmt.Fprintf(w, "Active connections: %d\n", conns)
+		fmt.Fprintf(w, "Response from backend server on port %s\n", port)
+	})
+
+	mux.HandleFunc("/stress", func(w http.ResponseWriter, r *http.Request) {
+		jitter := rand.Intn(300)
+		time.Sleep(time.Duration(jitter) * time.Millisecond)
+
+		if rand.Float32() < 0.1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, "Server on port %s failed under load!\n", port)
+			return
+		}
+		fmt.Fprintf(w, "Processed heavy request on port %s in %dms\n", port, jitter)
+	})
+
+	httpServer := &http.Server{
+		Addr:    ":" + port,
+		Handler: mux,
+		ConnState: func(conn net.Conn, state http.ConnState) {
+			switch state {
+			case http.StateNew:
+				atomic.AddInt32(&server.Connections, 1)
+			case http.StateClosed:
+				atomic.AddInt32(&server.Connections, -1)
+			}
+		},
+	}
+
+	return httpServer, port
 }
