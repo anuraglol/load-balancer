@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"lb"
+	"lb/metrics"
 	"log"
+	"math/rand"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -30,7 +32,7 @@ func healthCheck(s *lb.Server, interval time.Duration) {
 
 func main() {
 	balancer := &lb.LoadBalancer{Current: 0}
-	ports := []string{"http://localhost:5001", "http://localhost:5002"}
+	ports := []string{"http://localhost:5001", "http://localhost:5002", "http://localhost:5003", "http://localhost:5004"}
 	var servers []*lb.Server
 
 	for _, u := range ports {
@@ -39,9 +41,48 @@ func main() {
 			IsHealthy:    true,
 			URL:          parsedURL,
 			ReverseProxy: httputil.NewSingleHostReverseProxy(parsedURL),
+			Tracker:      metrics.NewConnTracker(),
 		}
 		servers = append(servers, server)
 		go healthCheck(server, 2*time.Second)
+	}
+
+	for _, server := range servers {
+		port := server.URL.Port()
+		go func(s *lb.Server) {
+			mux := http.NewServeMux()
+
+			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				current := s.Tracker.ActiveConns()
+				fmt.Fprintf(w, "Active connections: %d\n", current)
+				fmt.Fprintf(w, "Response from backend server on port %s\n", port)
+			})
+
+			mux.HandleFunc("/stress", func(w http.ResponseWriter, r *http.Request) {
+				// fmt.Printf("current connections to server with port %v is: %v\n", port, s.Tracker.ActiveConns())
+				jitter := rand.Intn(300)
+				time.Sleep(time.Duration(jitter) * time.Millisecond)
+
+				if rand.Float32() < 0.1 {
+					w.WriteHeader(http.StatusInternalServerError)
+					fmt.Fprintf(w, "Server on port %s failed under load!\n", port)
+					return
+				}
+
+				fmt.Fprintf(w, "Processed heavy request on port %s in %dms, when number of active connections is: %d\n", port, jitter, s.Tracker.ActiveConns())
+			})
+
+			httpServer := &http.Server{
+				Handler:   mux,
+				ConnState: s.Tracker.HandleStateChange,
+				Addr:      ":" + port,
+			}
+
+			log.Printf("Starting mock backend server on %s\n", port)
+			if err := httpServer.ListenAndServe(); err != nil {
+				log.Printf("Server on port %s crashed: %v\n", port, err)
+			}
+		}(server)
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
