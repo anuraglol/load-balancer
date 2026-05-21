@@ -18,12 +18,13 @@ type LoadBalancer struct {
 }
 
 type Server struct {
-	URL          *url.URL
-	IsHealthy    bool
-	ReverseProxy *httputil.ReverseProxy
-	Mutex        sync.Mutex
-	Connections  int32
-	Weight       int32 // more weight = can handle more load
+	URL           *url.URL
+	IsHealthy     bool
+	ReverseProxy  *httputil.ReverseProxy
+	Mutex         sync.Mutex
+	Connections   int32
+	Weight        int32 // more weight = can handle more load
+	TotalRequests uint64
 }
 
 type Config struct {
@@ -90,7 +91,7 @@ func PrepServer(server *Server) (*http.Server, string) {
 	})
 
 	mux.HandleFunc("/stress", func(w http.ResponseWriter, r *http.Request) {
-		jitter := rand.Intn(300)
+		jitter := rand.Intn(100)
 		time.Sleep(time.Duration(jitter) * time.Millisecond)
 
 		if rand.Float32() < 0.1 {

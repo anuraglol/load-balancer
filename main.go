@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -59,12 +60,62 @@ func main() {
 	}
 
 	mainMux := http.NewServeMux()
+
+	mainMux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+		type ServerStat struct {
+			URL   string
+			Count uint64
+		}
+
+		var stats []ServerStat
+		var maxCount uint64
+
+		for _, s := range servers {
+			count := atomic.LoadUint64(&s.TotalRequests)
+			if count > maxCount {
+				maxCount = count
+			}
+			stats = append(stats, ServerStat{
+				URL:   s.URL.String(),
+				Count: count,
+			})
+		}
+
+		_, _ = w.Write([]byte("histogram:\n"))
+
+		for _, stat := range stats {
+			var barLength int
+			if maxCount > 0 {
+				barLength = int((float64(stat.Count) / float64(maxCount)) * 40)
+			}
+
+			bar := ""
+			for b := 0; b < barLength; b++ {
+				bar += "■"
+			}
+
+			urlField := stat.URL
+			for len(urlField) < 25 {
+				urlField += " "
+			}
+
+			countField := "["
+
+			line := urlField + " " + countField + "Hits" + "] | " + bar + "\n"
+			_, _ = w.Write([]byte(line))
+		}
+	})
+
 	mainMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		s := balancer.GetNextServer(servers)
 		if s == nil {
 			http.Error(w, "No healthy server available", http.StatusServiceUnavailable)
 			return
 		}
+
+		atomic.AddUint64(&s.TotalRequests, 1)
 		s.ReverseProxy.ServeHTTP(w, r)
 	})
 	rateLimter := NewRateLimitMiddleware(10, 20)
