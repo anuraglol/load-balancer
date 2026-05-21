@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 	"lb"
-	"lb/metrics"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -41,7 +41,7 @@ func main() {
 			IsHealthy:    true,
 			URL:          parsedURL,
 			ReverseProxy: httputil.NewSingleHostReverseProxy(parsedURL),
-			Tracker:      metrics.NewConnTracker(),
+			Connections:  0,
 		}
 		servers = append(servers, server)
 		go healthCheck(server, 2*time.Second)
@@ -53,13 +53,12 @@ func main() {
 			mux := http.NewServeMux()
 
 			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-				current := s.Tracker.ActiveConns()
-				fmt.Fprintf(w, "Active connections: %d\n", current)
+				fmt.Fprintf(w, "Active connections: %d\n", server.Connections)
 				fmt.Fprintf(w, "Response from backend server on port %s\n", port)
 			})
 
 			mux.HandleFunc("/stress", func(w http.ResponseWriter, r *http.Request) {
-				// fmt.Printf("current connections to server with port %v is: %v\n", port, s.Tracker.ActiveConns())
+				fmt.Printf("current connections to server with port %v is: %v\n", port, s.Connections)
 				jitter := rand.Intn(300)
 				time.Sleep(time.Duration(jitter) * time.Millisecond)
 
@@ -69,13 +68,20 @@ func main() {
 					return
 				}
 
-				fmt.Fprintf(w, "Processed heavy request on port %s in %dms, when number of active connections is: %d\n", port, jitter, s.Tracker.ActiveConns())
+				fmt.Fprintf(w, "Processed heavy request on port %s in %dms, when number of active connections is: %d\n", port, jitter, s.Connections)
 			})
 
 			httpServer := &http.Server{
-				Handler:   mux,
-				ConnState: s.Tracker.HandleStateChange,
-				Addr:      ":" + port,
+				Handler: mux,
+				ConnState: func(conn net.Conn, state http.ConnState) {
+					switch state {
+					case http.StateNew:
+						server.Connections++
+					case http.StateClosed:
+						server.Connections--
+					}
+				},
+				Addr: ":" + port,
 			}
 
 			log.Printf("Starting mock backend server on %s\n", port)

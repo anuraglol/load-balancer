@@ -1,7 +1,6 @@
 package lb
 
 import (
-	"lb/metrics"
 	"net/http/httputil"
 	"net/url"
 	"sync"
@@ -17,7 +16,7 @@ type Server struct {
 	IsHealthy    bool
 	ReverseProxy *httputil.ReverseProxy
 	Mutex        sync.Mutex
-	Tracker      *metrics.ConnTracker
+	Connections  int
 }
 
 type Config struct {
@@ -30,6 +29,7 @@ func (lb *LoadBalancer) GetNextServer(servers []*Server) *Server {
 	lb.Mutex.Lock()
 	defer lb.Mutex.Unlock()
 
+	// static algo
 	// for range servers {
 	// 	idx := lb.Current % len(servers)
 	// 	nextServer := servers[idx]
@@ -46,7 +46,7 @@ func (lb *LoadBalancer) GetNextServer(servers []*Server) *Server {
 
 	minConnectionsIdx := 0
 	for idx, sv := range servers {
-		if sv.Tracker.ActiveConns() < servers[minConnectionsIdx].Tracker.ActiveConns() {
+		if sv.Connections < servers[minConnectionsIdx].Connections {
 			minConnectionsIdx = idx
 		}
 	}
